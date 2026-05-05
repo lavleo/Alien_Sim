@@ -1,44 +1,52 @@
 #include <fmt/format.h>
 #include "predator.h"
+#include "prey.h"
 #include <algorithm>
 #include <cmath>
-#include<random>
-#include <numbers>
+
+auto Predator::get_stage() const -> int
+{
+    if (eaten < 50)  return 0;  // Stalking
+    if (eaten < 150) return 1;  // Hunting
+    return 2;                   // Apex
+}
+
+auto Predator::get_current_speed() const -> double
+{
+    switch (get_stage())
+    {
+        case 0: return speed * 0.10;   // Stalking  — slow, cautious
+        case 1: return speed * 0.40;   // Hunting   — picking up pace
+        default: return speed;         // Apex      — full aggression
+    }
+}
 
 auto Predator::update(const double time_delta, const Environment& environment, const std::vector<Prey>& prey) -> void
 {
-    auto distance_to_predator = [&](const Prey& prey) {
-        return std::hypot(prey.position[0] - position[0], prey.position[1] - position[1]);
-        };
+    auto dist_to_me = [&](const Prey& p) {
+        return std::hypot(p.position[0] - position[0], p.position[1] - position[1]);
+    };
 
-    auto closest_prey = std::min_element(prey.begin(), prey.end(), [&](const Prey& f1, const Prey& f2) {
-        return distance_to_predator(f1) < distance_to_predator(f2);
-        });
+    auto closest = std::min_element(prey.begin(), prey.end(), [&](const Prey& a, const Prey& b) {
+        return dist_to_me(a) < dist_to_me(b);
+    });
 
-    if (closest_prey != prey.end()) {
-        double dx = closest_prey->position[0] - position[0];
-        double dy = closest_prey->position[1] - position[1];
-
-        double magnitude = std::hypot(dx, dy);
-
-        if (magnitude > 0) {
-            dx /= magnitude;
-            dy /= magnitude;
-        }
-
-        velocity[0] = dx;
-        velocity[1] = dy;
+    if (closest != prey.end())
+    {
+        double dx = closest->position[0] - position[0];
+        double dy = closest->position[1] - position[1];
+        double mag = std::hypot(dx, dy);
+        if (mag > 0) { velocity[0] = dx / mag; velocity[1] = dy / mag; }
     }
 
-    position[0] += velocity[0] * time_delta * std::ceil(eaten / 75);
-    position[1] += velocity[1] * time_delta * std::ceil(eaten / 75);
+    double spd = get_current_speed();
+    position[0] += velocity[0] * time_delta * spd;
+    position[1] += velocity[1] * time_delta * spd;
 
     environment.restrict_position(position);
-
     environment.reflect(position, velocity);
-
+    environment.resolve_obstacle_collision(position, velocity);
 }
-
 
 auto Predator::log(const double time) -> void
 {

@@ -2,6 +2,16 @@
     "seed": 1337,
     "region_limit": 100,
     "number_of_preys": 1000,
-    "predator_speed": 14.999999999999998,
-    "prey_speed": 1
+    "number_of_predators": 1,
+    "predator_speed": 15.0,
+    "prey_speed": 1.0,
+    "enable_flocking": true,
+    "reproduction_enabled": true,
+    "obstacles": [
+        {"x": [-70, -50], "y": [-10, 10]},
+        {"x": [30,  50],  "y": [-60, -40]},
+        {"x": [30,  50],  "y": [ 40,  60]},
+        {"x": [-50, -30], "y": [-60, -40]},
+        {"x": [-50, -30], "y": [ 40,  60]}
+    ]
 }
