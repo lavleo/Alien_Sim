@@ -6,7 +6,7 @@
 
 void Prey::update(const double time_delta, const Environment& environment,
                    const Predator& predator, const double time,
-                   const std::vector<Prey>& all_preys)
+                   const std::vector<const Prey*>& neighbors)
 {
     time_alive += time_delta;
 
@@ -56,11 +56,11 @@ void Prey::update(const double time_delta, const Environment& environment,
 
         double sep_x = 0, sep_y = 0;
         double coh_x = 0, coh_y = 0;
-        int    neighbors = 0;
+        int    n_neighbors = 0;
 
-        for (const auto& other : all_preys)
+        for (const Prey* other_ptr : neighbors)
         {
-            if (&other == this) continue;
+            const auto& other = *other_ptr;
             double dx = other.position[0] - position[0];
             double dy = other.position[1] - position[1];
             double d2 = sq(dx) + sq(dy);
@@ -69,7 +69,7 @@ void Prey::update(const double time_delta, const Environment& environment,
 
             coh_x += other.position[0];
             coh_y += other.position[1];
-            ++neighbors;
+            ++n_neighbors;
 
             if (d2 < SEP_R2 && d2 > 0)
             {
@@ -82,10 +82,10 @@ void Prey::update(const double time_delta, const Environment& environment,
         double new_vx = velocity[0] + sep_x * 0.04 * time_delta;
         double new_vy = velocity[1] + sep_y * 0.04 * time_delta;
 
-        if (neighbors > 0)
+        if (n_neighbors > 0)
         {
-            new_vx += (coh_x / neighbors - position[0]) * 0.001 * time_delta;
-            new_vy += (coh_y / neighbors - position[1]) * 0.001 * time_delta;
+            new_vx += (coh_x / n_neighbors - position[0]) * 0.001 * time_delta;
+            new_vy += (coh_y / n_neighbors - position[1]) * 0.001 * time_delta;
         }
 
         // Clamp to max speed

@@ -9,7 +9,7 @@ struct Prey
 {
     auto update(const double time_delta, const Environment& environment,
                 const Predator& predator, const double time,
-                const std::vector<Prey>& all_preys) -> void;
+                const std::vector<const Prey*>& neighbors) -> void;
     auto log(const double time) -> void;
 
     std::array<double, 2> position{};

@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 Model::Model(std::filesystem::path configuration_file)
 {
@@ -93,23 +94,52 @@ void Model::update(const double time_delta)
 
     if (predators.empty()) return;
 
-    // ── Snapshot for flocking (avoids iteration-while-erasing issues) ────────
-    std::vector<Prey> flock_ref;
-    if (enable_flocking) flock_ref = preys;
+    // ── Spatial grid for O(N) boids (cell size == cohesion radius = 15) ─────
+    constexpr double CELL = 15.0;
+    auto cell_key = [](int cx, int cy) -> int64_t {
+        return static_cast<int64_t>(cx + 2000) * 100000 + (cy + 2000);
+    };
+    std::unordered_map<int64_t, std::vector<std::size_t>> grid;
+    grid.reserve(preys.size());
+    for (std::size_t i = 0; i < preys.size(); ++i) {
+        int cx = static_cast<int>(std::floor(preys[i].position[0] / CELL));
+        int cy = static_cast<int>(std::floor(preys[i].position[1] / CELL));
+        grid[cell_key(cx, cy)].push_back(i);
+    }
 
     // ── Move all prey ────────────────────────────────────────────────────────
-    for (auto& prey : preys)
+    std::vector<const Prey*> neighbors;
+    neighbors.reserve(64);
+
+    for (std::size_t i = 0; i < preys.size(); ++i)
     {
-        // Each prey flees from the nearest predator
+        auto& prey = preys[i];
+
+        // Nearest predator using squared distance (avoids sqrt)
         const Predator* nearest = &predators[0];
-        double min_d = std::numeric_limits<double>::max();
+        double min_d2 = std::numeric_limits<double>::max();
         for (const auto& pred : predators)
         {
-            double d = std::hypot(prey.position[0] - pred.position[0],
-                                  prey.position[1] - pred.position[1]);
-            if (d < min_d) { min_d = d; nearest = &pred; }
+            double dx = prey.position[0] - pred.position[0];
+            double dy = prey.position[1] - pred.position[1];
+            double d2 = dx*dx + dy*dy;
+            if (d2 < min_d2) { min_d2 = d2; nearest = &pred; }
         }
-        prey.update(time_delta, environment, *nearest, time, flock_ref);
+
+        // Gather neighbors from 3×3 grid cells (excludes self)
+        neighbors.clear();
+        int cx = static_cast<int>(std::floor(prey.position[0] / CELL));
+        int cy = static_cast<int>(std::floor(prey.position[1] / CELL));
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy) {
+                auto it = grid.find(cell_key(cx + dx, cy + dy));
+                if (it != grid.end())
+                    for (std::size_t j : it->second)
+                        if (j != i)
+                            neighbors.push_back(&preys[j]);
+            }
+
+        prey.update(time_delta, environment, *nearest, time, neighbors);
     }
 
     // ── Eating / escaping / reproduction ─────────────────────────────────────
@@ -136,7 +166,8 @@ void Model::update(const double time_delta)
 
         if (eaten)
         {
-            it = preys.erase(it);
+            std::swap(*it, preys.back());
+            preys.pop_back();
             continue;
         }
 
@@ -144,7 +175,8 @@ void Model::update(const double time_delta)
         if (std::hypot(prey.position[0] - 90.0, prey.position[1] - 50.0) < 10.0 && time > 1600.0)
         {
             ++escaped;
-            it = preys.erase(it);
+            std::swap(*it, preys.back());
+            preys.pop_back();
             continue;
         }
 

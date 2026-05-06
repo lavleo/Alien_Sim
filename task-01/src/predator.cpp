@@ -23,12 +23,14 @@ auto Predator::get_current_speed() const -> double
 
 auto Predator::update(const double time_delta, const Environment& environment, const std::vector<Prey>& prey) -> void
 {
-    auto dist_to_me = [&](const Prey& p) {
-        return std::hypot(p.position[0] - position[0], p.position[1] - position[1]);
+    auto dist2_to_me = [&](const Prey& p) {
+        double dx = p.position[0] - position[0];
+        double dy = p.position[1] - position[1];
+        return dx*dx + dy*dy;
     };
 
     auto closest = std::min_element(prey.begin(), prey.end(), [&](const Prey& a, const Prey& b) {
-        return dist_to_me(a) < dist_to_me(b);
+        return dist2_to_me(a) < dist2_to_me(b);
     });
 
     if (closest != prey.end())

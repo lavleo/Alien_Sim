@@ -8,6 +8,8 @@ import panel as pn
 
 from .model import Model
 
+hv.extension('bokeh')
+
 # ── Config ────────────────────────────────────────────────────────────────────
 configuration_file = pathlib.Path(__file__).parents[1] / 'data' / 'config.json'
 config = json.load(open(configuration_file))

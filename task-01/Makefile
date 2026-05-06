@@ -10,6 +10,7 @@ SRC:=$(wildcard src/*.cpp)
 INC:=$(wildcard include/*.h)
 OBJ:=$(SRC:src/%.cpp=obj/%.o)
 LIBOBJ:=$(subst obj/main.o,,${OBJ})
+LIBOBJ:=$(subst obj/dashboard_model.o,,${LIBOBJ})
 OBJ:=$(subst obj/dashboard_model.o,,${OBJ})
 
 DEP:=$(SRC:src/%.cpp=dep/%.d)
