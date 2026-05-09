@@ -1,46 +1,49 @@
 #include <fmt/format.h>
 #include "predator.h"
-#include <algorithm>
+#include "prey.h"
+#include "ship.h"
 #include <cmath>
-#include<random>
-#include <numbers>
+#include <algorithm>
 
-auto Predator::update(const double time_delta, const Environment& environment, const std::vector<Prey>& prey) -> void
+void Predator::update(double time_delta, const Ship& ship,
+                      const std::vector<Prey>& prey, double time)
 {
-    auto distance_to_predator = [&](const Prey& prey) {
-        return std::hypot(prey.position[0] - position[0], prey.position[1] - position[1]);
-        };
+    // ── Hatch phase: immobile, wait in the egg ────────────────────────────
+    is_hatching = (time < hatch_time);
+    if (is_hatching) return;
 
-    auto closest_prey = std::min_element(prey.begin(), prey.end(), [&](const Prey& f1, const Prey& f2) {
-        return distance_to_predator(f1) < distance_to_predator(f2);
-        });
-
-    if (closest_prey != prey.end()) {
-        double dx = closest_prey->position[0] - position[0];
-        double dy = closest_prey->position[1] - position[1];
-
-        double magnitude = std::hypot(dx, dy);
-
-        if (magnitude > 0) {
-            dx /= magnitude;
-            dy /= magnitude;
-        }
-
-        velocity[0] = dx;
-        velocity[1] = dy;
+    // ── Lock-on: nearest non-hiding crew within lock_on_radius ───────────
+    const Prey* target = nullptr;
+    double      best   = lock_on_radius;
+    for (const auto& p : prey) {
+        if (p.state == CrewState::HIDING) continue;   // hidden crew are invisible
+        double d = std::hypot(p.position[0]-position[0], p.position[1]-position[1]);
+        if (d < best) { best = d; target = &p; }
     }
 
-    position[0] += velocity[0] * time_delta * std::ceil(eaten / 75);
-    position[1] += velocity[1] * time_delta * std::ceil(eaten / 75);
+    if (target) {
+        double dx = target->position[0] - position[0];
+        double dy = target->position[1] - position[1];
+        double m  = std::hypot(dx, dy);
+        if (m > 0) { velocity[0] = dx/m; velocity[1] = dy/m; }
+        locked_on = true;
+    } else {
+        locked_on = false;
+        // Player-supplied velocity direction stays as-is
+    }
 
-    environment.restrict_position(position);
-
-    environment.reflect(position, velocity);
-
+    // ── Move: speed multiplier grows every 75 crew eaten ─────────────────
+    double m = std::hypot(velocity[0], velocity[1]);
+    if (m > 0) {
+        double speed_mult = std::ceil(eaten / 75.0);
+        std::array<double,2> new_pos = {
+            position[0] + (velocity[0]/m) * time_delta * base_speed * speed_mult,
+            position[1] + (velocity[1]/m) * time_delta * base_speed * speed_mult
+        };
+        position = ship.resolve_movement(position, new_pos);
+    }
 }
 
-
-auto Predator::log(const double time) -> void
-{
+void Predator::log(double time) {
     fmt::print("{:.2f},{:.2f},{:.2f}\n", time, position[0], position[1]);
 }
