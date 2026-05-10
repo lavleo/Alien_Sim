@@ -148,7 +148,7 @@ std::vector<std::array<double,2>> Ship::path_between_rooms(int from_id, int to_i
             // Forward (room_a→room_b): bend is (bx, by)
             // Reverse (room_b→room_a): the mirror bend is (x1, y2) i.e. (room_a.cx, room_b.cy)
             if (c.room_a == path[i]) wps.push_back({c.bx, c.by});
-            else                     wps.push_back({c.x1, c.y2});
+            else wps.push_back({c.x2, c.y1});
         }
         wps.push_back(room_center(path[i+1]));
     }

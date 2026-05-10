@@ -1,9 +1,9 @@
 {
     "seed": 1337,
     "region_limit": 100,
-    "number_of_preys": 50,
-    "predator_speed": 15.0,
+    "number_of_preys": 500,
+    "predator_speed": 2,
     "prey_speed": 7.0,
-    "lock_on_radius": 20.0,
+    "lock_on_radius": 1.0,
     "hatch_time": 20.0
 }

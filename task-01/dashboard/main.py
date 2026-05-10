@@ -1,78 +1,142 @@
 """Alien Sim — Player Controlled
-Visualization-only Python layer. All simulation logic runs in C++.
-
-Controls:  WASD / Arrow keys — steer the Xenomorph
-           Yellow dot = lock-on active (auto-lunging at nearest crew)
-           White pulsing dot = hatching phase (can't move yet)
+WASD / Arrow keys to steer. No click needed — keyboard is captured at the
+document level and pushed into Bokeh via its own model-sync protocol.
 """
 import json
 import math
 import pathlib
 
-import holoviews as hv
-import numpy as np
-import pandas as pd
 import panel as pn
-from holoviews import opts
+from bokeh.plotting import figure
+from bokeh.models import ColumnDataSource, Range1d
 
-from .model import Model, CrewState
+from model import Model, CrewState
 
 pn.extension("bokeh")
-hv.extension("bokeh")
 
-# ─── Paths / config ───────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 configuration_file = pathlib.Path(__file__).parents[1] / "data" / "config.json"
 config = json.load(open(configuration_file))
+WORLD  = config.get("region_limit", 100)
 
-WORLD = config.get("region_limit", 100)
-
-# ─── Crew state → colour ──────────────────────────────────────────────────────
 STATE_COLOR = {
-    CrewState.IDLE:     "#B8B8B8",   # light grey
-    CrewState.ALERTED:  "#FF8C00",   # orange
-    CrewState.FLEEING:  "#FFD700",   # gold
-    CrewState.HIDING:   "#228B22",   # forest green  (hidden from lock-on)
-    CrewState.ESCAPING: "#00CED1",   # dark turquoise
+    CrewState.IDLE:     "#B8B8B8",
+    CrewState.ALERTED:  "#FF8C00",
+    CrewState.FLEEING:  "#FFD700",
+    CrewState.HIDING:   "#228B22",
+    CrewState.ESCAPING: "#00CED1",
 }
 
-# ─── Keyboard bridge (JS → hidden TextInput → Python) ────────────────────────
-_dir = [0.0, 0.0]   # [dx, dy] updated by JS
+# ─── Keyboard state ────────────────────────────────────────────────────────────
+# Two parallel mechanisms so at least one fires:
+#
+#  A) JS writes to a named ColumnDataSource ("kbd") via Bokeh's model-sync
+#     protocol.  run_model() reads it directly — no Python callback needed.
+#
+#  B) Bokeh on_event(KeyDown/KeyUp) fires when the canvas has focus (user
+#     clicked the plot).  Updates _dir which run_model() also reads.
+#
+# Whichever delivers a non-zero vector first wins each frame.
 
-key_input = pn.widgets.TextInput(placeholder="__KEYSTATE__", value="0,0", visible=False)
+_dir     = [0.0, 0.0]     # set by mechanism B
+_pressed = set()
+TRACKED  = {'w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'}
 
-def _on_key(event):
-    try:
-        dx, dy = event.new.split(",")
-        _dir[0] = float(dx); _dir[1] = float(dy)
-    except Exception:
-        _dir[0] = _dir[1] = 0.0
+def _update_dir():
+    dx, dy = 0.0, 0.0
+    if 'a' in _pressed or 'ArrowLeft'  in _pressed: dx -= 1.0
+    if 'd' in _pressed or 'ArrowRight' in _pressed: dx += 1.0
+    if 'w' in _pressed or 'ArrowUp'    in _pressed: dy += 1.0
+    if 's' in _pressed or 'ArrowDown'  in _pressed: dy -= 1.0
+    _dir[0], _dir[1] = dx, dy
 
-key_input.param.watch(_on_key, "value")
+def _key_down(event):
+    if event.key in TRACKED:
+        _pressed.add(event.key); _update_dir()
 
+def _key_up(event):
+    _pressed.discard(event.key); _update_dir()
+
+# ─── Data sources ─────────────────────────────────────────────────────────────
+# Mechanism A: keyboard state arrives here via Bokeh model-sync from the browser
+kbd_src = ColumnDataSource(data=dict(dx=[0.0], dy=[0.0]), name="kbd")
+
+# Ship geometry
+corr_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+norm_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+vent_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+shuttle_src = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+
+# Simulation layers
+trail_src = ColumnDataSource(dict(x=[], y=[]))
+crew_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]))
+pings_src = ColumnDataSource(dict(x=[], y=[], s=[]))
+pred_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]))
+
+# ─── Figure ───────────────────────────────────────────────────────────────────
+p = figure(
+    width=620, height=620,
+    x_range=Range1d(-WORLD, WORLD),
+    y_range=Range1d(-WORLD, WORLD),
+    background_fill_color="#060D14",
+    border_fill_color="#060D14",
+    toolbar_location=None,
+    output_backend="webgl",
+)
+p.xaxis.visible = p.yaxis.visible = p.grid.visible = False
+
+# Ship
+p.quad(source=corr_src,    left='left', right='right', top='top', bottom='bottom', color="#111A22", line_color=None)
+p.quad(source=norm_src,    left='left', right='right', top='top', bottom='bottom', color="#1C2B3A", line_color="#2A4060", line_width=1)
+p.quad(source=vent_src,    left='left', right='right', top='top', bottom='bottom', color="#0D1F0D", line_color="#1A3520", line_width=1)
+p.quad(source=shuttle_src, left='left', right='right', top='top', bottom='bottom', color="#0D1A2E", line_color="#1A3860", line_width=1)
+
+# Sim layers
+p.scatter('x','y', source=trail_src, color="#556677", size=2,  alpha=0.30, line_color=None)
+p.scatter('x','y', source=crew_src,  color='c',       size='s',alpha=0.85, line_color=None)
+p.scatter('x','y', source=pings_src, color="#FF6600", size='s',alpha=0.20, line_color="#FF6600", line_width=1, line_alpha=0.5)
+p.scatter('x','y', source=pred_src,  color='c',       size='s',            line_color='black', line_width=0.5)
+
+# Anchor kbd_src to the figure (alpha=0 → invisible) so Bokeh includes it in
+# the client-side document and JS can find it by name.
+p.scatter('dx','dy', source=kbd_src, size=1, alpha=0, line_color=None)
+
+
+plot_pane = pn.pane.Bokeh(p, sizing_mode="fixed")
+
+# ─── JS keyboard bridge (mechanism A) ────────────────────────────────────────
+# Listens on the document (no focus needed), finds the named ColumnDataSource
+# via Bokeh's own JS model API, and writes dx/dy into it.  Bokeh's sync
+# protocol propagates the change to the Python server automatically.
 keyboard_js = pn.pane.HTML("""
 <script>
 (function () {
+    "use strict";
     const pressed = {};
     const TRACKED = new Set(
         ['w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight']);
 
-    function dir() {
+    // Resolve the Bokeh ColumnDataSource named "kbd"
+    let kbdSrc = null;
+    function findSrc() {
+        try {
+            const doc = Bokeh && Bokeh.documents && Bokeh.documents[0];
+            if (doc) kbdSrc = doc.get_model_by_name('kbd');
+        } catch (_) {}
+        if (!kbdSrc) setTimeout(findSrc, 250);
+    }
+    findSrc();
+
+    function push() {
+        if (!kbdSrc) { findSrc(); return; }
         let dx = 0, dy = 0;
         if (pressed['a'] || pressed['ArrowLeft'])  dx -= 1;
         if (pressed['d'] || pressed['ArrowRight']) dx += 1;
         if (pressed['w'] || pressed['ArrowUp'])    dy += 1;
         if (pressed['s'] || pressed['ArrowDown'])  dy -= 1;
-        return dx + ',' + dy;
-    }
-
-    function push() {
-        const el = document.querySelector('input[placeholder="__KEYSTATE__"]');
-        if (!el) return;
-        const setter = Object.getOwnPropertyDescriptor(
-            HTMLInputElement.prototype, 'value').set;
-        setter.call(el, dir());
-        el.dispatchEvent(new Event('input',  {bubbles:true}));
-        el.dispatchEvent(new Event('change', {bubbles:true}));
+        // Writing to a Bokeh model property in server mode triggers a
+        // PATCH_DOC message that updates kbd_src.data on the Python server.
+        kbdSrc.data = {dx: [dx], dy: [dy]};
     }
 
     document.addEventListener('keydown', e => {
@@ -86,279 +150,192 @@ keyboard_js = pn.pane.HTML("""
     window.addEventListener('blur', () => {
         for (const k of Object.keys(pressed)) delete pressed[k]; push();
     });
+
+    // Also auto-focus the canvas so Bokeh's own KeyDown events fire too
+    function focusCanvas() {
+        const c = document.querySelector('canvas.bk-canvas');
+        if (!c) { setTimeout(focusCanvas, 300); return; }
+        c.setAttribute('tabindex', '1');
+        c.focus();
+    }
+    setTimeout(focusCanvas, 500);
 })();
 </script>
 """, height=0, width=0, margin=0)
 
-# ─── HoloViews pipes for dynamic layers ───────────────────────────────────────
-EMPTY = pd.DataFrame({"x": [], "y": [], "c": [], "s": []})
-EMPTY_TRAIL  = pd.DataFrame({"x": [], "y": []})
-EMPTY_PINGS  = pd.DataFrame({"x": [], "y": [], "s": []})
-
-pipe_pred  = hv.streams.Pipe(data=EMPTY)
-pipe_crew  = hv.streams.Pipe(data=EMPTY)
-pipe_trail = hv.streams.Pipe(data=EMPTY_TRAIL)
-pipe_pings = hv.streams.Pipe(data=EMPTY_PINGS)
-
-# ─── Static ship overlay (computed after first model init) ────────────────────
-_ship_overlay = None
-
-def _build_ship_overlay(ship):
-    corr_rects, vent_rects, shuttle_rects, normal_rects = [], [], [], []
-
-    # Corridors: each L-shaped corridor = 2 axis-aligned rectangles
+# ─── Ship source helper ───────────────────────────────────────────────────────
+def _update_ship_sources(ship):
+    cl, cr, ct, cb = [], [], [], []
     for c in ship.corridors:
-        for ax, ay, bx, by in [(c.x1, c.y1, c.bx, c.by),
-                                (c.bx, c.by, c.x2, c.y2)]:
-            corr_rects.append((min(ax,bx)-c.hw, min(ay,by)-c.hw,
-                                max(ax,bx)+c.hw, max(ay,by)+c.hw))
-
+        for ax, ay, bx, by in [(c.x1,c.y1,c.bx,c.by),(c.bx,c.by,c.x2,c.y2)]:
+            cl.append(min(ax,bx)-c.hw); cr.append(max(ax,bx)+c.hw)
+            cb.append(min(ay,by)-c.hw); ct.append(max(ay,by)+c.hw)
+    corr_src.data = dict(left=cl, right=cr, top=ct, bottom=cb)
+    nl,nr,nt,nb = [],[],[],[]
+    vl,vr,vt,vb = [],[],[],[]
+    sl,sr,st,sb = [],[],[],[]
     for r in ship.rooms:
-        rect = (r.cx-r.hw, r.cy-r.hh, r.cx+r.hw, r.cy+r.hh)
-        if r.is_vent:        vent_rects.append(rect)
-        elif r.is_shuttle_bay: shuttle_rects.append(rect)
-        else:                normal_rects.append(rect)
+        if r.is_vent:
+            vl.append(r.cx-r.hw); vr.append(r.cx+r.hw)
+            vt.append(r.cy+r.hh); vb.append(r.cy-r.hh)
+        elif r.is_shuttle_bay:
+            sl.append(r.cx-r.hw); sr.append(r.cx+r.hw)
+            st.append(r.cy+r.hh); sb.append(r.cy-r.hh)
+        else:
+            nl.append(r.cx-r.hw); nr.append(r.cx+r.hw)
+            nt.append(r.cy+r.hh); nb.append(r.cy-r.hh)
+    norm_src.data    = dict(left=nl, right=nr, top=nt, bottom=nb)
+    vent_src.data    = dict(left=vl, right=vr, top=vt, bottom=vb)
+    shuttle_src.data = dict(left=sl, right=sr, top=st, bottom=sb)
 
-    def rects(data, color, line_c="#000000", lw=0):
-        if not data:
-            data = [(0, 0, 0, 0)]    # dummy so HoloViews doesn't complain
-        return hv.Rectangles(data).opts(
-            color=color, line_color=line_c, line_width=lw,
-            fill_alpha=1.0, tools=[])
-
-    overlay = (
-        rects(corr_rects,    "#111A22")                           # dark corridors
-        * rects(normal_rects, "#1C2B3A", "#2A4060", 1)           # crew rooms
-        * rects(vent_rects,   "#0D1F0D", "#1A3520", 1)           # ventilation ducts
-        * rects(shuttle_rects,"#0D1A2E", "#1A3860", 1)           # shuttle bay
-    )
-    return overlay
-
-# ─── Dynamic plot callbacks ───────────────────────────────────────────────────
-def _plot_pred(data):
-    return hv.Scatter(data, kdims=["x"], vdims=["y","c","s"]).opts(
-        opts.Scatter(color="c", size="s", line_color="black",
-                     line_width=0.5, tools=[]))
-
-def _plot_crew(data):
-    return hv.Scatter(data, kdims=["x"], vdims=["y","c","s"]).opts(
-        opts.Scatter(color="c", size="s", alpha=0.85, tools=[]))
-
-def _plot_trail(data):
-    return hv.Scatter(data, kdims=["x"], vdims=["y"]).opts(
-        opts.Scatter(color="#556677", size=2, alpha=0.30, tools=[]))
-
-def _plot_pings(data):
-    return hv.Scatter(data, kdims=["x"], vdims=["y","s"]).opts(
-        opts.Scatter(color="#FF6600", size="s", alpha=0.20,
-                     line_color="#FF6600", line_width=1, line_alpha=0.5,
-                     tools=[]))
-
-dmap_pred  = hv.DynamicMap(_plot_pred,  streams=[pipe_pred])
-dmap_crew  = hv.DynamicMap(_plot_crew,  streams=[pipe_crew])
-dmap_trail = hv.DynamicMap(_plot_trail, streams=[pipe_trail])
-dmap_pings = hv.DynamicMap(_plot_pings, streams=[pipe_pings])
-
-PLOT_OPTS = dict(
-    xlim=(-WORLD, WORLD), ylim=(-WORLD, WORLD),
-    height=620, width=620,
-    xaxis=None, yaxis=None,
-    bgcolor="#060D14",
-    show_grid=False,
-)
-
-# ─── Model & simulation state ─────────────────────────────────────────────────
-model_state      = Model(str(configuration_file))
+# ─── Model ────────────────────────────────────────────────────────────────────
+model_state       = Model(str(configuration_file))
 periodic_callback = None
 global_time_delta = 0.25
+Ping_MAX_AGE      = 3.0
 
-# Build static ship overlay once
-_ship_overlay = _build_ship_overlay(model_state.ship)
+_update_ship_sources(model_state.ship)
 
-# Full plot: ship layout + dynamic layers
-full_plot = (
-    _ship_overlay
-    * dmap_trail
-    * dmap_crew
-    * dmap_pings
-    * dmap_pred
-).opts(**PLOT_OPTS)
+def _push_initial_frame():
+    pr = model_state.predator
+    pred_src.data = dict(x=[pr.position[0]], y=[pr.position[1]], c=["#FFFFFF"], s=[10.0])
+    if model_state.preys:
+        crew_src.data = dict(
+            x=[m.position[0] for m in model_state.preys],
+            y=[m.position[1] for m in model_state.preys],
+            c=["#B8B8B8"]*len(model_state.preys),
+            s=[5.0]*len(model_state.preys),
+        )
+    trail_src.data = dict(x=[], y=[])
+    pings_src.data = dict(x=[], y=[], s=[])
 
-# ─── run_model (called every frame) ───────────────────────────────────────────
+_push_initial_frame()
+
+# ─── Main loop ────────────────────────────────────────────────────────────────
 def run_model():
     if not model_state.preys:
-        periodic_callback.stop()
-        play_button.name = "▶ Play"
-        return
+        periodic_callback.stop(); play_button.name = "▶ Play"; return
 
-    # Push player direction to C++ predator
-    model_state.predator.set_velocity(_dir[0], _dir[1])
+    # Read direction from mechanism A (JS→Bokeh model-sync) first;
+    # fall back to mechanism B (Bokeh KeyDown events) if A is zero.
+    js_dx = float(kbd_src.data.get('dx', [0.0])[0])
+    js_dy = float(kbd_src.data.get('dy', [0.0])[0])
+    dx = js_dx if (js_dx or js_dy) else _dir[0]
+    dy = js_dy if (js_dx or js_dy) else _dir[1]
+
+    model_state.predator.set_velocity(dx, dy)
     model_state.update(global_time_delta)
+    pr = model_state.predator
 
-    p = model_state.predator
-
-    # ── Predator dot ──────────────────────────────────────────────────────
-    if p.is_hatching:
-        # Pulse white during egg phase
-        pulse = 0.5 + 0.5 * math.sin(model_state.time * 6.0)
-        pred_color = "#FFFFFF"
-        pred_size  = 6.0 + pulse * 6.0
+    # Predator dot
+    if pr.is_hatching:
+        pulse = 0.5 + 0.5*math.sin(model_state.time*6.0)
+        pc, ps = "#FFFFFF", 6.0+pulse*6.0
     else:
-        pred_color = "#FFE020" if p.locked_on else "#FF2244"
-        pred_size  = min(8.0 + int(p.eaten / 75) * 3.0, 26.0)
+        pc = "#FFE020" if pr.locked_on else "#FF2244"
+        ps = min(8.0+int(pr.eaten/75)*3.0, 26.0)
+    pred_src.data = dict(x=[pr.position[0]], y=[pr.position[1]], c=[pc], s=[ps])
 
-    pred_df = pd.DataFrame({"x": [p.position[0]], "y": [p.position[1]],
-                             "c": [pred_color],    "s": [pred_size]})
-
-    # ── Crew dots (coloured by state) ────────────────────────────────────
+    # Crew
     if model_state.preys:
-        crew_rows = [
-            {"x": pr.position[0], "y": pr.position[1],
-             "c": STATE_COLOR.get(pr.state, "#888888"), "s": 5.0}
-            for pr in model_state.preys
-        ]
-        crew_df = pd.DataFrame(crew_rows)
-    else:
-        crew_df = EMPTY
+        crew_src.data = dict(
+            x=[m.position[0] for m in model_state.preys],
+            y=[m.position[1] for m in model_state.preys],
+            c=[STATE_COLOR.get(m.state,"#888") for m in model_state.preys],
+            s=[5.0]*len(model_state.preys),
+        )
 
-    # ── O2 trails (sub-sampled for performance) ───────────────────────────
-    trail_rows = []
-    step = max(1, len(model_state.preys) // 150)
-    for i, pr in enumerate(model_state.preys):
-        if i % step == 0:
-            for pos in pr.trail:
-                trail_rows.append({"x": pos[0], "y": pos[1]})
-    trail_df = pd.DataFrame(trail_rows) if trail_rows else EMPTY_TRAIL
+    # Trails
+    tx, ty, step = [], [], max(1, len(model_state.preys)//100)
+    for i, m in enumerate(model_state.preys):
+        if i%step==0:
+            for pos in m.trail: tx.append(pos[0]); ty.append(pos[1])
+    trail_src.data = dict(x=tx, y=ty)
 
-    # ── Alert pings (growing rings) ───────────────────────────────────────
+    # Pings
     if model_state.pings:
-        ping_rows = [
-            {"x": pg.x, "y": pg.y,
-             "s": 4.0 + pg.age / Ping_MAX_AGE * 30.0}
-            for pg in model_state.pings
-        ]
-        pings_df = pd.DataFrame(ping_rows)
+        pings_src.data = dict(
+            x=[pg.x for pg in model_state.pings],
+            y=[pg.y for pg in model_state.pings],
+            s=[4.0+pg.age/Ping_MAX_AGE*30.0 for pg in model_state.pings],
+        )
     else:
-        pings_df = EMPTY_PINGS
+        pings_src.data = dict(x=[], y=[], s=[])
 
-    pipe_pred.send(pred_df)
-    pipe_crew.send(crew_df)
-    pipe_trail.send(trail_df)
-    pipe_pings.send(pings_df)
-
-    # ── HUD ───────────────────────────────────────────────────────────────
+    # HUD
     t = model_state.time
     time_box.value    = f"{t:.1f} s"
     caught_box.value  = str(model_state.score.crew_caught)
     escaped_box.value = str(model_state.score.crew_escaped)
     remain_box.value  = str(len(model_state.preys))
-    eaten_box.value   = str(int(p.eaten))
-    speed_mult        = max(1, int(p.eaten // 75))
-    speed_box.value   = f"{p.base_speed * speed_mult:.1f} u/s  (×{speed_mult})"
-    status_box.value  = ("🥚 HATCHING" if p.is_hatching
-                         else "🔒 LOCKED ON" if p.locked_on
+    eaten_box.value   = str(int(pr.eaten))
+    sm                = max(1, int(pr.eaten//75))
+    speed_box.value   = f"{pr.base_speed*sm:.1f} u/s (×{sm})"
+    status_box.value  = ("🥚 HATCHING" if pr.is_hatching
+                         else "🔒 LOCKED ON" if pr.locked_on
                          else "👁 HUNTING")
-
-    secs_left = max(0.0, 1600.0 - t)
+    key_box.value     = f"dx={dx:+.0f}  dy={dy:+.0f}"   # live diagnostic
+    secs = max(0.0, 1600.0-t)
     if model_state.shuttle_open:
         shuttle_box.value = "⚠ OPEN — CREW ESCAPING"
     else:
-        m, s = divmod(int(secs_left), 60)
-        shuttle_box.value = f"OPENS IN {m:02d}:{s:02d}"
+        mm, ss = divmod(int(secs), 60)
+        shuttle_box.value = f"OPENS IN {mm:02d}:{ss:02d}"
 
-
-# Grab the Ping MAX_AGE constant from Python side
-Ping_MAX_AGE = 3.0   # matches C++ Ping::MAX_AGE
-
-
-# ─── Play / reset controls ────────────────────────────────────────────────────
+# ─── Controls ─────────────────────────────────────────────────────────────────
 def play(event):
     global periodic_callback
     if periodic_callback is None or not periodic_callback.running:
         play_button.name = "⏹ Stop"
         periodic_callback = pn.state.add_periodic_callback(
-            run_model, period=max(17, 1000 // fps_slider.value))
+            run_model, period=max(17, 1000//fps_slider.value))
     else:
-        periodic_callback.stop()
-        play_button.name = "▶ Play"
-
+        periodic_callback.stop(); play_button.name = "▶ Play"
 
 def reset(event):
-    global model_state, _ship_overlay, periodic_callback
-
+    global model_state, periodic_callback
     if periodic_callback and periodic_callback.running:
         periodic_callback.stop(); periodic_callback = None
         play_button.name = "▶ Play"
-
-    # Write updated config
     config["seed"]            = seed_input.value
     config["number_of_preys"] = crew_count_input.value
     config["predator_speed"]  = speed_slider.value
     config["lock_on_radius"]  = lock_on_slider.value
     config["hatch_time"]      = hatch_slider.value
-    with open(configuration_file, "w") as f:
-        json.dump(config, f, indent=4)
-
-    model_state   = Model(str(configuration_file))
-    _ship_overlay = _build_ship_overlay(model_state.ship)
-
-    # Rebuild the full_plot overlay with the new ship layout
-    new_plot = (
-        _ship_overlay * dmap_trail * dmap_crew * dmap_pings * dmap_pred
-    ).opts(**PLOT_OPTS)
-    plot_pane.object = new_plot
-
-    # Push initial frame
+    with open(configuration_file, "w") as f: json.dump(config, f, indent=4)
+    model_state = Model(str(configuration_file))
+    _update_ship_sources(model_state.ship)
     _push_initial_frame()
-
-
-def _push_initial_frame():
-    p = model_state.predator
-    pred_df = pd.DataFrame({"x": [p.position[0]], "y": [p.position[1]],
-                             "c": ["#FFFFFF"], "s": [10.0]})
-    if model_state.preys:
-        crew_df = pd.DataFrame({
-            "x": [pr.position[0] for pr in model_state.preys],
-            "y": [pr.position[1] for pr in model_state.preys],
-            "c": ["#B8B8B8"] * len(model_state.preys),
-            "s": [5.0]       * len(model_state.preys),
-        })
-    else:
-        crew_df = EMPTY
-    pipe_pred.send(pred_df)
-    pipe_crew.send(crew_df)
-    pipe_trail.send(EMPTY_TRAIL)
-    pipe_pings.send(EMPTY_PINGS)
-
-
-_push_initial_frame()
+    _pressed.clear(); _dir[0]=_dir[1]=0.0
+    kbd_src.data = dict(dx=[0.0], dy=[0.0])
 
 # ─── Widgets ──────────────────────────────────────────────────────────────────
-time_box     = pn.widgets.TextInput(name="Elapsed",        disabled=True, value="0.0 s")
-remain_box   = pn.widgets.TextInput(name="Crew remaining", disabled=True)
-caught_box   = pn.widgets.TextInput(name="Crew caught",    disabled=True, value="0")
-escaped_box  = pn.widgets.TextInput(name="Crew escaped",   disabled=True, value="0")
-eaten_box    = pn.widgets.TextInput(name="Total eaten",    disabled=True, value="1")
-speed_box    = pn.widgets.TextInput(name="Xeno speed",     disabled=True)
-status_box   = pn.widgets.TextInput(name="Status",         disabled=True, value="🥚 HATCHING")
-shuttle_box  = pn.widgets.TextInput(name="Shuttle bay",    disabled=True)
+time_box     = pn.widgets.TextInput(name="Elapsed",         disabled=True, value="0.0 s")
+remain_box   = pn.widgets.TextInput(name="Crew remaining",  disabled=True)
+caught_box   = pn.widgets.TextInput(name="Crew caught",     disabled=True, value="0")
+escaped_box  = pn.widgets.TextInput(name="Crew escaped",    disabled=True, value="0")
+eaten_box    = pn.widgets.TextInput(name="Total eaten",     disabled=True, value="1")
+speed_box    = pn.widgets.TextInput(name="Xeno speed",      disabled=True)
+status_box   = pn.widgets.TextInput(name="Status",          disabled=True, value="🥚 HATCHING")
+shuttle_box  = pn.widgets.TextInput(name="Shuttle bay",     disabled=True)
+key_box      = pn.widgets.TextInput(name="🎮 Input (diag)", disabled=True, value="dx=+0  dy=+0")
 
-seed_input       = pn.widgets.IntInput(   name="Random seed",      value=config.get("seed", 1337))
-crew_count_input = pn.widgets.IntInput(   name="Crew count",       value=config.get("number_of_preys", 50), start=5, end=500)
-speed_slider     = pn.widgets.FloatSlider(name="Xeno base speed",  start=2.0, end=25.0, value=config.get("predator_speed", 15.0))
-lock_on_slider   = pn.widgets.FloatSlider(name="Lock-on radius",   start=0.0, end=50.0, step=1.0, value=config.get("lock_on_radius", 20.0))
-hatch_slider     = pn.widgets.FloatSlider(name="Hatch delay (s)",  start=0.0, end=60.0, step=1.0, value=config.get("hatch_time", 20.0))
-fps_slider       = pn.widgets.IntSlider(  name="FPS",              start=4,   end=60,   value=30)
+seed_input       = pn.widgets.IntInput(   name="Random seed",     value=config.get("seed",1337))
+crew_count_input = pn.widgets.IntInput(   name="Crew count",      value=config.get("number_of_preys",50), start=5, end=500)
+speed_slider     = pn.widgets.FloatSlider(name="Xeno base speed", start=2.0, end=25.0, value=config.get("predator_speed",15.0))
+lock_on_slider   = pn.widgets.FloatSlider(name="Lock-on radius",  start=0.0, end=50.0, step=1.0, value=config.get("lock_on_radius",20.0))
+hatch_slider     = pn.widgets.FloatSlider(name="Hatch delay (s)", start=0.0, end=60.0, step=1.0, value=config.get("hatch_time",20.0))
+fps_slider       = pn.widgets.IntSlider(  name="FPS",             start=4,   end=60,   value=30)
 
 play_button  = pn.widgets.Button(name="▶ Play",  button_type="success")
 reset_button = pn.widgets.Button(name="⟳ Reset", button_type="warning")
 play_button.on_click(play)
 reset_button.on_click(reset)
 
-plot_pane = pn.pane.HoloViews(full_plot, sizing_mode="fixed")
-
 description = pn.pane.Markdown("""
 ### Controls
+WASD or Arrow keys — no click required.
+
 | Key | Action |
 |-----|--------|
 | **W / ↑** | Move up |
@@ -366,37 +343,37 @@ description = pn.pane.Markdown("""
 | **A / ←** | Move left |
 | **D / →** | Move right |
 
+Watch **🎮 Input** in the sidebar — it shows the direction
+being received each frame. If it changes when you press keys,
+the bridge is working.
+
 ---
 ### Crew states
 | Colour | State |
 |--------|-------|
 | ⬜ Grey | Idle |
 | 🟠 Orange | Alerted |
-| 🟡 Gold | Fleeing to vent |
-| 🟢 Green | Hiding (invisible to lock-on) |
-| 🔵 Cyan | Escaping to shuttle |
+| 🟡 Gold | Fleeing |
+| 🟢 Green | Hiding |
+| 🔵 Cyan | Escaping |
 
 ---
 ### Tips
-- **Yellow dot** = lock-on engaged; no input needed.
-- **White pulsing dot** = alien still hatching.
-- Dot **grows** each time you eat 75 crew and gains a speed bonus.
-- Orange rings = alert pings (crew spotted you).
-- Grey dots = O₂ trail left by crew.
-- Shuttle bay **(top-right, blue room)** opens at t = 1600 s.
-- Vent rooms **(green)** hide crew from your lock-on sensor.
+- **White pulsing** = hatching (20 s); predator can't move yet.
+- **Yellow** = lock-on; steers automatically.
+- Dot grows every 75 crew eaten (+speed).
+- Shuttle opens at t = 1600 s.
+- Crew in green vent rooms are invisible to lock-on.
 """)
 
-# ─── Layout ───────────────────────────────────────────────────────────────────
 stats_card = pn.Card(
     time_box, remain_box, caught_box, escaped_box,
-    eaten_box, speed_box, status_box, shuttle_box,
+    eaten_box, speed_box, status_box, shuttle_box, key_box,
     collapsible=False, title="Mission Data",
 )
 config_card = pn.Card(
-    seed_input, crew_count_input,
-    speed_slider, lock_on_slider, hatch_slider,
-    fps_slider,
+    seed_input, crew_count_input, speed_slider, lock_on_slider,
+    hatch_slider, fps_slider,
     pn.Row(reset_button, play_button),
     collapsible=False, title="Simulation Config",
 )
@@ -409,11 +386,7 @@ pn.template.FastListTemplate(
     title="Alien Sim — Player Controlled",
     main=[
         keyboard_js,
-        key_input,
-        pn.Row(
-            pn.Column(plot_pane),
-            pn.Column(description, width=260),
-        ),
+        pn.Row(pn.Column(plot_pane), pn.Column(description, width=260)),
     ],
     sidebar=[stats_card, config_card],
 ).servable()
