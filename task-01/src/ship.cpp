@@ -15,18 +15,18 @@ struct SizeRange { double hw_min, hw_max, hh_min, hh_max; };
 
 SizeRange size_for(RoomType t) noexcept {
     switch (t) {
-        case RoomType::Bridge:        return {10, 14,  8, 11};
-        case RoomType::Medbay:        return {12, 16, 10, 14};
-        case RoomType::Comms:         return {10, 14, 10, 13};
-        case RoomType::Armory:        return {11, 15, 10, 13};
-        case RoomType::CrewQuarters:  return {13, 18, 11, 16};
-        case RoomType::Storage:       return {12, 17, 10, 14};
-        case RoomType::Reactor:       return {14, 18, 12, 16};
-        case RoomType::EngineRoom:    return {15, 20, 12, 16};
-        case RoomType::EnginePod:     return {20, 28,  8, 12}; // wide, squat
-        case RoomType::ShuttleBay:    return {16, 22, 13, 18};
-        case RoomType::VentShaft:     return { 6, 10,  6,  9};
-        default:                      return {12, 17, 10, 15};
+        case RoomType::Bridge:        return {14, 20, 11, 16};
+        case RoomType::Medbay:        return {17, 23, 14, 20};
+        case RoomType::Comms:         return {14, 20, 14, 18};
+        case RoomType::Armory:        return {15, 21, 14, 18};
+        case RoomType::CrewQuarters:  return {18, 26, 16, 23};
+        case RoomType::Storage:       return {17, 24, 14, 20};
+        case RoomType::Reactor:       return {20, 26, 17, 23};
+        case RoomType::EngineRoom:    return {21, 28, 17, 23};
+        case RoomType::EnginePod:     return {28, 40, 11, 17}; // wide, squat
+        case RoomType::ShuttleBay:    return {22, 31, 18, 26};
+        case RoomType::VentShaft:     return { 8, 14,  8, 13};
+        default:                      return {17, 24, 14, 21};
     }
 }
 
@@ -187,13 +187,12 @@ void Ship::generate(std::mt19937& rng, double world_limit) {
     hull_xs.clear(); hull_ys.clear();
 
     // ── Stage 1: Profile ──────────────────────────────────────────────────────
-    // Weight: Fighter(1) Frigate(3) Cruiser(3) Carrier(1)
-    std::discrete_distribution<int> class_dist({1, 3, 3, 1});
-    ShipClass klass = static_cast<ShipClass>(class_dist(rng));
+    // Always use the largest ship class for a bigger, harder-to-hunt layout
+    ShipClass klass = ShipClass::Carrier;
     profile = ShipProfile::make(klass);
 
-    // Scale profile so the spine fits inside the world with a comfortable margin
-    double scale = std::min(1.0, (world_limit * 1.7) / profile.spine_length);
+    // Scale profile so the spine fills the world generously (was 1.7x, now 2.1x)
+    double scale = std::min(1.0, (world_limit * 2.1) / profile.spine_length);
     profile.spine_length   *= scale;
     profile.max_half_width *= scale;
 

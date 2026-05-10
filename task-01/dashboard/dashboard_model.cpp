@@ -25,23 +25,37 @@ PYBIND11_MODULE(model, m) {
         .def_readonly("cy",             &Room::cy)
         .def_readonly("hw",             &Room::hw)
         .def_readonly("hh",             &Room::hh)
+        // FIX: expose type as int (matches RoomType enum ordinals 0-11)
+        .def_property_readonly("type_id",        [](const Room& r){ return static_cast<int>(r.type); })
         .def_property_readonly("is_vent",        [](const Room& r){ return r.is_vent(); })
-        .def_property_readonly("is_shuttle_bay", [](const Room& r){ return r.is_shuttle_bay(); });
+        .def_property_readonly("is_shuttle_bay", [](const Room& r){ return r.is_shuttle_bay(); })
+        // FIX: add missing boolean helpers used by _room_bucket fallback
+        .def_property_readonly("is_engine",      [](const Room& r){ return r.is_engine(); })
+        .def_property_readonly("is_bridge",      [](const Room& r){ return r.is_bridge(); })
+        .def_property_readonly("is_medbay",      [](const Room& r){ return r.type == RoomType::Medbay; })
+        .def_property_readonly("is_comms",       [](const Room& r){ return r.type == RoomType::Comms; })
+        .def_property_readonly("is_armory",      [](const Room& r){ return r.type == RoomType::Armory; })
+        .def_property_readonly("is_crew_qrtrs",  [](const Room& r){ return r.type == RoomType::CrewQuarters; })
+        .def_property_readonly("is_storage",     [](const Room& r){ return r.type == RoomType::Storage; })
+        .def_property_readonly("is_reactor",     [](const Room& r){ return r.type == RoomType::Reactor; });
 
     py::class_<Corridor>(m, "Corridor")
-        .def_readonly("x1", &Corridor::x1)
-        .def_readonly("y1", &Corridor::y1)
-        .def_readonly("bx", &Corridor::bx)
-        .def_readonly("by", &Corridor::by)
-        .def_readonly("x2", &Corridor::x2)
-        .def_readonly("y2", &Corridor::y2)
-        .def_readonly("hw", &Corridor::hw);
+        .def_readonly("x1",           &Corridor::x1)
+        .def_readonly("y1",           &Corridor::y1)
+        .def_readonly("bx",           &Corridor::bx)
+        .def_readonly("by",           &Corridor::by)
+        .def_readonly("x2",           &Corridor::x2)
+        .def_readonly("y2",           &Corridor::y2)
+        .def_readonly("hw",           &Corridor::hw)
+        .def_readonly("is_vent_shaft",&Corridor::is_vent_shaft);  // FIX: was missing
 
     py::class_<Ship>(m, "Ship")
         .def_readonly("rooms",           &Ship::rooms)
         .def_readonly("corridors",       &Ship::corridors)
         .def_readonly("shuttle_room_id", &Ship::shuttle_room_id)
-        .def_readonly("vent_room_ids",   &Ship::vent_room_ids);
+        .def_readonly("vent_room_ids",   &Ship::vent_room_ids)
+        .def_readonly("hull_xs",         &Ship::hull_xs)   // FIX: was missing
+        .def_readonly("hull_ys",         &Ship::hull_ys);  // FIX: was missing
 
     // ── Predator ──────────────────────────────────────────────────────────
     py::class_<Predator>(m, "Predator")

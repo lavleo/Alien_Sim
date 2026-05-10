@@ -227,30 +227,19 @@ keyboard_js = pn.pane.HTML("""
  
 def _room_bucket(r):
     """Return the ColumnDataSource for a given room's type."""
-    # If your bindings expose r.type as a Python IntEnum:
-    try:
-        from your_module import RoomType  # replace 'your_module' with your binding name
-        buckets = {
-            RoomType.Bridge:       bridge_src,
-            RoomType.Medbay:       medbay_src,
-            RoomType.Comms:        comms_src,
-            RoomType.Armory:       armory_src,
-            RoomType.CrewQuarters: crew_src_room,
-            RoomType.Storage:      storage_src,
-            RoomType.Reactor:      reactor_src,
-            RoomType.EngineRoom:   engine_src,
-            RoomType.EnginePod:    engine_src,
-            RoomType.ShuttleBay:   shuttle_src,
-            RoomType.VentShaft:    vent_src,
-        }
-        return buckets.get(r.type, norm_src)
-    except ImportError:
-        # Fallback: use the old boolean methods for compatibility
-        if r.is_vent():        return vent_src
-        if r.is_shuttle_bay(): return shuttle_src
-        if r.is_engine():      return engine_src
-        if r.is_bridge():      return bridge_src
-        return norm_src
+    # FIX: removed broken 'from your_module import RoomType' placeholder.
+    # Use the boolean properties now fully exposed by the pybind11 binding.
+    if r.is_bridge:        return bridge_src
+    if r.is_medbay:        return medbay_src
+    if r.is_comms:         return comms_src
+    if r.is_armory:        return armory_src
+    if r.is_crew_qrtrs:    return crew_src_room
+    if r.is_storage:       return storage_src
+    if r.is_reactor:       return reactor_src
+    if r.is_engine:        return engine_src
+    if r.is_vent:          return vent_src
+    if r.is_shuttle_bay:   return shuttle_src
+    return norm_src
  
  
 def _update_ship_sources(ship):
@@ -341,7 +330,7 @@ def run_model():
         pc, ps = "#FFFFFF", 6.0+pulse*6.0
     else:
         pc = "#FFE020" if pr.locked_on else "#FF2244"
-        ps = min(8.0+int(pr.eaten/75)*3.0, 26.0)
+        ps = min(8.0+int(pr.eaten/150)*3.0, 26.0)
     pred_src.data = dict(x=[pr.position[0]], y=[pr.position[1]], c=[pc], s=[ps])
 
     # Crew
@@ -377,7 +366,7 @@ def run_model():
     escaped_box.value = str(model_state.score.crew_escaped)
     remain_box.value  = str(len(model_state.preys))
     eaten_box.value   = str(int(pr.eaten))
-    sm                = max(1, int(pr.eaten//75))
+    sm                = max(1, int(pr.eaten//150))
     speed_box.value   = f"{pr.base_speed*sm:.1f} u/s (×{sm})"
     status_box.value  = ("🥚 HATCHING" if pr.is_hatching
                          else "🔒 LOCKED ON" if pr.locked_on

@@ -35,7 +35,7 @@ void Predator::update(double time_delta, const Ship& ship,
     // ── Move: speed multiplier grows every 75 crew eaten ─────────────────
     double m = std::hypot(velocity[0], velocity[1]);
     if (m > 0) {
-        double speed_mult = std::ceil(eaten / 75.0);
+        double speed_mult = std::ceil(eaten / 150.0);
         std::array<double,2> new_pos = {
             position[0] + (velocity[0]/m) * time_delta * base_speed * speed_mult,
             position[1] + (velocity[1]/m) * time_delta * base_speed * speed_mult

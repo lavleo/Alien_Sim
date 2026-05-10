@@ -5,10 +5,10 @@
 #include <algorithm>
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
-static constexpr double DETECT_RADIUS  = 18.0;   // crew spots predator at this dist
-static constexpr double PANIC_RADIUS   = 30.0;   // flee-cool-off zone boundary
+static constexpr double DETECT_RADIUS  = 28.0;   // crew spots predator at this dist
+static constexpr double PANIC_RADIUS   = 50.0;   // flee-cool-off zone boundary
 static constexpr double CREW_SPEED     =  7.0;   // base units / second
-static constexpr double ALERT_COOLDOWN =  6.0;   // seconds before alarm fades
+static constexpr double ALERT_COOLDOWN = 10.0;   // seconds before alarm fades
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 void Prey::set_path_to(const Ship& ship, int room_id) {
@@ -168,7 +168,7 @@ void Prey::update(double time_delta, const Ship& ship,
         break;
 
     case CrewState::FLEEING:
-        move_toward_waypoint(ship, CREW_SPEED * 1.1, time_delta);
+        move_toward_waypoint(ship, CREW_SPEED * 1.4, time_delta);
         break;
 
     case CrewState::HIDING:
@@ -176,7 +176,7 @@ void Prey::update(double time_delta, const Ship& ship,
         break;
 
     case CrewState::ESCAPING:
-        move_toward_waypoint(ship, CREW_SPEED * 1.3, time_delta);
+        move_toward_waypoint(ship, CREW_SPEED * 1.6, time_delta);
         break;
     }
 }
