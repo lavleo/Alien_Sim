@@ -25,8 +25,8 @@ PYBIND11_MODULE(model, m) {
         .def_readonly("cy",             &Room::cy)
         .def_readonly("hw",             &Room::hw)
         .def_readonly("hh",             &Room::hh)
-        .def_readonly("is_vent",        &Room::is_vent)
-        .def_readonly("is_shuttle_bay", &Room::is_shuttle_bay);
+        .def_property_readonly("is_vent",        [](const Room& r){ return r.is_vent(); })
+        .def_property_readonly("is_shuttle_bay", [](const Room& r){ return r.is_shuttle_bay(); });
 
     py::class_<Corridor>(m, "Corridor")
         .def_readonly("x1", &Corridor::x1)

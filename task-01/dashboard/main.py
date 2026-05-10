@@ -62,10 +62,22 @@ def _key_up(event):
 kbd_src = ColumnDataSource(data=dict(dx=[0.0], dy=[0.0]), name="kbd")
 
 # Ship geometry
-corr_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
-norm_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
-vent_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
-shuttle_src = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+corr_src       = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+vent_shaft_src = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+ 
+bridge_src     = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+medbay_src     = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+comms_src      = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+armory_src     = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+crew_src_room  = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))  # crew quarters rooms
+storage_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+reactor_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+engine_src     = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))  # EngineRoom + EnginePod
+vent_src       = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))  # VentShaft rooms
+shuttle_src    = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))
+norm_src       = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))  # Normal / fallback
+ 
+hull_src       = ColumnDataSource(dict(xs=[[]], ys=[[]]))
 
 # Simulation layers
 trail_src = ColumnDataSource(dict(x=[], y=[]))
@@ -85,11 +97,50 @@ p = figure(
 )
 p.xaxis.visible = p.yaxis.visible = p.grid.visible = False
 
-# Ship
-p.quad(source=corr_src,    left='left', right='right', top='top', bottom='bottom', color="#111A22", line_color=None)
-p.quad(source=norm_src,    left='left', right='right', top='top', bottom='bottom', color="#1C2B3A", line_color="#2A4060", line_width=1)
-p.quad(source=vent_src,    left='left', right='right', top='top', bottom='bottom', color="#0D1F0D", line_color="#1A3520", line_width=1)
-p.quad(source=shuttle_src, left='left', right='right', top='top', bottom='bottom', color="#0D1A2E", line_color="#1A3860", line_width=1)
+# Hull outline — drawn first so it sits behind everything
+p.patch('xs', 'ys', source=hull_src,
+        color="#0A1520", line_color="#1A3A5C", line_width=1.5, alpha=0.9)
+ 
+# Corridors
+p.quad(source=corr_src,       left='left', right='right', top='top', bottom='bottom',
+       color="#0D1822", line_color=None)
+p.quad(source=vent_shaft_src, left='left', right='right', top='top', bottom='bottom',
+       color="#0A120A", line_color="#1A2A1A", line_width=0.5, line_dash="dashed")
+ 
+# Rooms — each type gets its own colour
+# Normal / fallback
+p.quad(source=norm_src,      left='left', right='right', top='top', bottom='bottom',
+       color="#1C2B3A", line_color="#2A4060", line_width=1)
+# Bridge — bright blue accent
+p.quad(source=bridge_src,    left='left', right='right', top='top', bottom='bottom',
+       color="#0D2040", line_color="#2060C0", line_width=1.5)
+# Medbay — clinical teal
+p.quad(source=medbay_src,    left='left', right='right', top='top', bottom='bottom',
+       color="#0D2828", line_color="#1A6060", line_width=1)
+# Comms — purple hint
+p.quad(source=comms_src,     left='left', right='right', top='top', bottom='bottom',
+       color="#1A1030", line_color="#3A2060", line_width=1)
+# Armory — dark red
+p.quad(source=armory_src,    left='left', right='right', top='top', bottom='bottom',
+       color="#200D0D", line_color="#602020", line_width=1)
+# Crew quarters — warm grey
+p.quad(source=crew_src_room, left='left', right='right', top='top', bottom='bottom',
+       color="#1C2020", line_color="#384040", line_width=1)
+# Storage — muted brown
+p.quad(source=storage_src,   left='left', right='right', top='top', bottom='bottom',
+       color="#1C1810", line_color="#403020", line_width=1)
+# Reactor — amber glow
+p.quad(source=reactor_src,   left='left', right='right', top='top', bottom='bottom',
+       color="#201400", line_color="#604000", line_width=1.5)
+# Engine — orange
+p.quad(source=engine_src,    left='left', right='right', top='top', bottom='bottom',
+       color="#201000", line_color="#804010", line_width=1.5)
+# Vent shaft rooms — dark green
+p.quad(source=vent_src,      left='left', right='right', top='top', bottom='bottom',
+       color="#0D1F0D", line_color="#1A3520", line_width=1)
+# Shuttle bay — cold blue
+p.quad(source=shuttle_src,   left='left', right='right', top='top', bottom='bottom',
+       color="#0D1A2E", line_color="#1A3860", line_width=1.5)
 
 # Sim layers
 p.scatter('x','y', source=trail_src, color="#556677", size=2,  alpha=0.30, line_color=None)
@@ -163,30 +214,87 @@ keyboard_js = pn.pane.HTML("""
 </script>
 """, height=0, width=0, margin=0)
 
-# ─── Ship source helper ───────────────────────────────────────────────────────
+
+# Room-type → (source, 'key') mapping.
+# NOTE: Python bindings expose RoomType as an int or enum value.
+#       Adjust the comparison below to match how your pybind11 binding exposes it.
+#       If RoomType is exposed as a Python IntEnum called RoomType, use:
+#           from your_module import RoomType
+#       and compare with RoomType.Bridge, etc.
+#       If it's exposed as a plain int, compare with the numeric values:
+#           0=Normal, 1=Bridge, 2=Medbay, 3=Comms, 4=Armory, 5=CrewQuarters,
+#           6=Storage, 7=Reactor, 8=EngineRoom, 9=EnginePod, 10=ShuttleBay, 11=VentShaft
+ 
+def _room_bucket(r):
+    """Return the ColumnDataSource for a given room's type."""
+    # If your bindings expose r.type as a Python IntEnum:
+    try:
+        from your_module import RoomType  # replace 'your_module' with your binding name
+        buckets = {
+            RoomType.Bridge:       bridge_src,
+            RoomType.Medbay:       medbay_src,
+            RoomType.Comms:        comms_src,
+            RoomType.Armory:       armory_src,
+            RoomType.CrewQuarters: crew_src_room,
+            RoomType.Storage:      storage_src,
+            RoomType.Reactor:      reactor_src,
+            RoomType.EngineRoom:   engine_src,
+            RoomType.EnginePod:    engine_src,
+            RoomType.ShuttleBay:   shuttle_src,
+            RoomType.VentShaft:    vent_src,
+        }
+        return buckets.get(r.type, norm_src)
+    except ImportError:
+        # Fallback: use the old boolean methods for compatibility
+        if r.is_vent():        return vent_src
+        if r.is_shuttle_bay(): return shuttle_src
+        if r.is_engine():      return engine_src
+        if r.is_bridge():      return bridge_src
+        return norm_src
+ 
+ 
 def _update_ship_sources(ship):
-    cl, cr, ct, cb = [], [], [], []
+    # Corridors
+    cl, cr, ct, cb   = [], [], [], []   # main corridors
+    vl, vr, vt, vb   = [], [], [], []   # vent shafts
+ 
     for c in ship.corridors:
-        for ax, ay, bx, by in [(c.x1,c.y1,c.bx,c.by),(c.bx,c.by,c.x2,c.y2)]:
-            cl.append(min(ax,bx)-c.hw); cr.append(max(ax,bx)+c.hw)
-            cb.append(min(ay,by)-c.hw); ct.append(max(ay,by)+c.hw)
-    corr_src.data = dict(left=cl, right=cr, top=ct, bottom=cb)
-    nl,nr,nt,nb = [],[],[],[]
-    vl,vr,vt,vb = [],[],[],[]
-    sl,sr,st,sb = [],[],[],[]
+        for ax, ay, bx, by in [(c.x1, c.y1, c.bx, c.by),
+                                (c.bx, c.by, c.x2, c.y2)]:
+            l = min(ax, bx) - c.hw;  r = max(ax, bx) + c.hw
+            b = min(ay, by) - c.hw;  t = max(ay, by) + c.hw
+            if c.is_vent_shaft:
+                vl.append(l); vr.append(r); vt.append(t); vb.append(b)
+            else:
+                cl.append(l); cr.append(r); ct.append(t); cb.append(b)
+ 
+    corr_src.data       = dict(left=cl, right=cr, top=ct, bottom=cb)
+    vent_shaft_src.data = dict(left=vl, right=vr, top=vt, bottom=vb)
+ 
+    # Hull polygon
+    if ship.hull_xs and ship.hull_ys:
+        hull_src.data = dict(xs=[list(ship.hull_xs)], ys=[list(ship.hull_ys)])
+    else:
+        hull_src.data = dict(xs=[[]], ys=[[]])
+ 
+    # Rooms — clear all buckets first
+    all_room_srcs = [
+        bridge_src, medbay_src, comms_src, armory_src, crew_src_room,
+        storage_src, reactor_src, engine_src, vent_src, shuttle_src, norm_src,
+    ]
+    buckets = {src: ([], [], [], []) for src in all_room_srcs}  # left,right,top,bottom
+ 
     for r in ship.rooms:
-        if r.is_vent:
-            vl.append(r.cx-r.hw); vr.append(r.cx+r.hw)
-            vt.append(r.cy+r.hh); vb.append(r.cy-r.hh)
-        elif r.is_shuttle_bay:
-            sl.append(r.cx-r.hw); sr.append(r.cx+r.hw)
-            st.append(r.cy+r.hh); sb.append(r.cy-r.hh)
-        else:
-            nl.append(r.cx-r.hw); nr.append(r.cx+r.hw)
-            nt.append(r.cy+r.hh); nb.append(r.cy-r.hh)
-    norm_src.data    = dict(left=nl, right=nr, top=nt, bottom=nb)
-    vent_src.data    = dict(left=vl, right=vr, top=vt, bottom=vb)
-    shuttle_src.data = dict(left=sl, right=sr, top=st, bottom=sb)
+        src = _room_bucket(r)
+        ll, rr, tt, bb = buckets[src]
+        ll.append(r.cx - r.hw)
+        rr.append(r.cx + r.hw)
+        tt.append(r.cy + r.hh)
+        bb.append(r.cy - r.hh)
+ 
+    for src, (ll, rr, tt, bb) in buckets.items():
+        src.data = dict(left=ll, right=rr, top=tt, bottom=bb)
+
 
 # ─── Model ────────────────────────────────────────────────────────────────────
 model_state       = Model(str(configuration_file))

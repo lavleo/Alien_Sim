@@ -41,7 +41,7 @@ void Model::initialize(std::filesystem::path configuration_file) {
 
     std::vector<int> spawn_rooms;
     for (const auto& r : ship.rooms)
-        if (!r.is_shuttle_bay && r.id != 4)
+        if (!r.is_shuttle_bay() && r.id != 4)
             spawn_rooms.push_back(r.id);
 
     std::uniform_int_distribution<int>  room_pick(0, (int)spawn_rooms.size()-1);
