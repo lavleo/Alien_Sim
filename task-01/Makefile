@@ -32,7 +32,7 @@ $(TRGT_EXE): setup setup_bin $(OBJ)
 
 dashboard: setup $(LIBOBJ) obj/dashboard_model.o
 	$(CXX) $(LIBOBJ) obj/dashboard_model.o $(PYTHON_LD_FLAGS) -shared -o $(TGRT_DASHBOARD)
-	panel serve dashboard
+	panel serve dashboard --static-dirs sprites=dashboard/static
 
 setup:
 	@mkdir -p obj

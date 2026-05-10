@@ -79,11 +79,11 @@ norm_src       = ColumnDataSource(dict(left=[], right=[], top=[], bottom=[]))  #
  
 hull_src       = ColumnDataSource(dict(xs=[[]], ys=[[]]))
 
-# Simulation layers
-trail_src = ColumnDataSource(dict(x=[], y=[]))
-crew_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]))
-pings_src = ColumnDataSource(dict(x=[], y=[], s=[]))
-pred_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]))
+# Simulation layers — named so JS overlay can find them
+trail_src = ColumnDataSource(dict(x=[], y=[]),             name="trail")
+crew_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]), name="crew")
+pings_src = ColumnDataSource(dict(x=[], y=[], s=[]),       name="pings")
+pred_src  = ColumnDataSource(dict(x=[], y=[], c=[], s=[]), name="pred")
 
 # ─── Figure ───────────────────────────────────────────────────────────────────
 p = figure(
@@ -142,11 +142,11 @@ p.quad(source=vent_src,      left='left', right='right', top='top', bottom='bott
 p.quad(source=shuttle_src,   left='left', right='right', top='top', bottom='bottom',
        color="#0D1A2E", line_color="#1A3860", line_width=1.5)
 
-# Sim layers
-p.scatter('x','y', source=trail_src, color="#556677", size=2,  alpha=0.30, line_color=None)
-p.scatter('x','y', source=crew_src,  color='c',       size='s',alpha=0.85, line_color=None)
-p.scatter('x','y', source=pings_src, color="#FF6600", size='s',alpha=0.20, line_color="#FF6600", line_width=1, line_alpha=0.5)
-p.scatter('x','y', source=pred_src,  color='c',       size='s',            line_color='black', line_width=0.5)
+# Sim layers — kept at alpha=0; JS canvas overlay draws sprites instead
+p.scatter('x','y', source=trail_src, color="#556677", size=2,  alpha=0,    line_color=None)
+p.scatter('x','y', source=crew_src,  color='c',       size='s',alpha=0,    line_color=None)
+p.scatter('x','y', source=pings_src, color="#FF6600", size='s',alpha=0,    line_color=None)
+p.scatter('x','y', source=pred_src,  color='c',       size='s',alpha=0,    line_color=None)
 
 # Anchor kbd_src to the figure (alpha=0 → invisible) so Bokeh includes it in
 # the client-side document and JS can find it by name.
@@ -163,11 +163,12 @@ keyboard_js = pn.pane.HTML("""
 <script>
 (function () {
     "use strict";
+
+    // ── Keyboard bridge (unchanged) ───────────────────────────────────────────
     const pressed = {};
     const TRACKED = new Set(
         ['w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight']);
 
-    // Resolve the Bokeh ColumnDataSource named "kbd"
     let kbdSrc = null;
     function findSrc() {
         try {
@@ -185,8 +186,6 @@ keyboard_js = pn.pane.HTML("""
         if (pressed['d'] || pressed['ArrowRight']) dx += 1;
         if (pressed['w'] || pressed['ArrowUp'])    dy += 1;
         if (pressed['s'] || pressed['ArrowDown'])  dy -= 1;
-        // Writing to a Bokeh model property in server mode triggers a
-        // PATCH_DOC message that updates kbd_src.data on the Python server.
         kbdSrc.data = {dx: [dx], dy: [dy]};
     }
 
@@ -202,7 +201,6 @@ keyboard_js = pn.pane.HTML("""
         for (const k of Object.keys(pressed)) delete pressed[k]; push();
     });
 
-    // Also auto-focus the canvas so Bokeh's own KeyDown events fire too
     function focusCanvas() {
         const c = document.querySelector('canvas.bk-canvas');
         if (!c) { setTimeout(focusCanvas, 300); return; }
@@ -210,6 +208,344 @@ keyboard_js = pn.pane.HTML("""
         c.focus();
     }
     setTimeout(focusCanvas, 500);
+
+    // ── Sprite + Particle overlay ─────────────────────────────────────────────
+    //
+    // Strategy:
+    //   1. Wait for the Bokeh canvas to exist, then create a Canvas2D overlay
+    //      positioned exactly on top of it.
+    //   2. Each rAF, read the named ColumnDataSources (crew, pred, trail, pings)
+    //      that Python updates every tick, convert world→pixel coords using
+    //      Bokeh's own x_range/y_range, and draw sprites.
+    //   3. Particles are pure JS — spawned on crew-catch events and on pings,
+    //      never touching the Python server.
+    //
+    // Sprite files expected at dashboard/static/:
+    //   xeno.png        — xenomorph, any size, will be drawn 48×48 px (or scaled)
+    //   xeno_locked.png — xenomorph with yellow glow (locked-on state)
+    //   xeno_egg.png    — pulsing egg (hatching state)
+    //   crew_idle.png   — crew dot, ~16×16 px
+    //   crew_alert.png  — crew alerted
+    //   crew_flee.png   — crew fleeing
+    //   crew_hide.png   — crew hiding
+    //   crew_escape.png — crew escaping
+    //
+    // All sprites are centred on the agent position.
+    // If a file fails to load, a coloured circle fallback is drawn instead.
+
+    const SPRITE_DIR = '/sprites/';
+
+    // Load a sprite, return an Image object (may not be complete yet)
+    function loadSprite(name) {
+        const img = new Image();
+        img.src = SPRITE_DIR + name;
+        img.onerror = () => { img._failed = true; };
+        return img;
+    }
+
+    const SPRITES = {
+        xeno:        loadSprite('xeno.png'),
+        xeno_locked: loadSprite('xeno_locked.png'),
+        xeno_egg:    loadSprite('xeno_egg.png'),
+        crew_idle:   loadSprite('crew_idle.png'),
+        crew_alert:  loadSprite('crew_alert.png'),
+        crew_flee:   loadSprite('crew_flee.png'),
+        crew_hide:   loadSprite('crew_hide.png'),
+        crew_escape: loadSprite('crew_escape.png'),
+    };
+
+    // Fallback colours when sprite hasn't loaded
+    const FALLBACK = {
+        xeno: '#FF2244', xeno_locked: '#FFE020', xeno_egg: '#FFFFFF',
+        crew_idle: '#B8B8B8', crew_alert: '#FF8C00', crew_flee: '#FFD700',
+        crew_hide: '#228B22', crew_escape: '#00CED1',
+    };
+
+    // Crew state index → sprite key  (matches Python CrewState enum order)
+    // CrewState values: IDLE=0 ALERTED=1 FLEEING=2 HIDING=3 ESCAPING=4
+    const CREW_SPRITE = ['crew_idle','crew_alert','crew_flee','crew_hide','crew_escape'];
+    // Colour strings for the 'c' field Python writes
+    const STATE_COLOR_TO_IDX = {
+        '#B8B8B8': 0,  // IDLE
+        '#FF8C00': 1,  // ALERTED
+        '#FFD700': 2,  // FLEEING
+        '#228B22': 3,  // HIDING
+        '#00CED1': 4,  // ESCAPING
+    };
+
+    // ── Particle system ───────────────────────────────────────────────────────
+    // Each particle: {x, y, vx, vy, life, maxLife, r, g, b, size}
+    const particles = [];
+
+    function spawnAcidSplatter(px, py) {
+        // Green acid blood — burst of 18 particles
+        for (let i = 0; i < 18; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 0.4 + Math.random() * 1.8;
+            particles.push({
+                x: px, y: py,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1.0, maxLife: 1.0,
+                r: 20 + Math.floor(Math.random()*60),
+                g: 180 + Math.floor(Math.random()*75),
+                b: 20,
+                size: 2 + Math.random() * 3,
+            });
+        }
+    }
+
+    function spawnPingRipple(px, py) {
+        // Orange alert ring — 12 outward sparks
+        for (let i = 0; i < 12; i++) {
+            const angle = (i / 12) * Math.PI * 2;
+            const speed = 0.6 + Math.random() * 0.8;
+            particles.push({
+                x: px, y: py,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1.0, maxLife: 0.7,
+                r: 255, g: 120 + Math.floor(Math.random()*80), b: 0,
+                size: 1.5 + Math.random() * 2,
+            });
+        }
+    }
+
+    function spawnScreenFlash() {
+        // Brief white overlay on the canvas — handled separately via _flashAlpha
+        _flashAlpha = 0.45;
+    }
+
+    let _flashAlpha = 0;
+
+    function updateParticles(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x    += p.vx * dt * 60;
+            p.y    += p.vy * dt * 60;
+            p.vx   *= 0.93;
+            p.vy   *= 0.93;
+            p.life -= dt / p.maxLife;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+        if (_flashAlpha > 0) _flashAlpha = Math.max(0, _flashAlpha - dt * 3.5);
+    }
+
+    // ── Overlay canvas ────────────────────────────────────────────────────────
+    let overlay = null;
+    let ctx     = null;
+
+    // Bokeh model references — resolved once after load
+    let crewSrc  = null;
+    let predSrc  = null;
+    let pingSrc  = null;
+    let bokehPlot = null;  // the Plot model (has x_range / y_range)
+
+    let _prevCrewCount = -1;
+    let _prevPingCount = 0;
+
+    function findModels() {
+        try {
+            const doc = Bokeh.documents[0];
+            crewSrc   = doc.get_model_by_name('crew');
+            predSrc   = doc.get_model_by_name('pred');
+            pingSrc   = doc.get_model_by_name('pings');
+            // The Plot model is the first Plot in the document
+            bokehPlot = doc.get_model_by_type('Plot');
+        } catch(_) {}
+        if (!crewSrc || !predSrc || !bokehPlot) {
+            setTimeout(findModels, 300);
+            return;
+        }
+        initOverlay();
+    }
+
+    function initOverlay() {
+        // Find the Bokeh canvas container and size our overlay to match exactly
+        function tryInit() {
+            const bkCanvas = document.querySelector('canvas.bk-canvas');
+            if (!bkCanvas) { setTimeout(tryInit, 300); return; }
+
+            overlay = document.createElement('canvas');
+            overlay.style.position = 'absolute';
+            overlay.style.pointerEvents = 'none';  // clicks pass through to Bokeh
+            overlay.style.imageRendering = 'pixelated';
+            overlay.style.left = '0px';
+            overlay.style.top  = '0px';
+            bkCanvas.parentElement.style.position = 'relative';
+            bkCanvas.parentElement.appendChild(overlay);
+
+            function syncSize() {
+                overlay.width  = bkCanvas.width;
+                overlay.height = bkCanvas.height;
+                overlay.style.width  = bkCanvas.style.width  || bkCanvas.width  + 'px';
+                overlay.style.height = bkCanvas.style.height || bkCanvas.height + 'px';
+            }
+            syncSize();
+            new ResizeObserver(syncSize).observe(bkCanvas);
+
+            ctx = overlay.getContext('2d');
+            bkCanvas.setAttribute('tabindex', '1');
+            bkCanvas.focus();
+
+            requestAnimationFrame(renderLoop);
+        }
+        tryInit();
+    }
+
+    // ── Coordinate transform ──────────────────────────────────────────────────
+    // Bokeh world coords → overlay pixel coords.
+    // Bokeh's y-axis is mathematical (up=positive); canvas y is inverted.
+    function worldToPixel(wx, wy) {
+        if (!bokehPlot || !overlay) return [0, 0];
+        const xr = bokehPlot.x_range;
+        const yr = bokehPlot.y_range;
+        // Account for Bokeh's plot frame inset (axes area).
+        // We probe the bk-canvas bounding vs the plot frame.
+        const frame = bokehPlot.frame;
+        const fw = frame ? frame._width  : overlay.width;
+        const fh = frame ? frame._height : overlay.height;
+        const fl = frame ? frame._left   : 0;
+        const ft = frame ? frame._top    : 0;
+
+        const px = fl + (wx - xr.start) / (xr.end - xr.start) * fw;
+        const py = ft + (1 - (wy - yr.start) / (yr.end - yr.start)) * fh;
+        return [px, py];
+    }
+
+    // ── Draw a sprite centred at (px,py), size w×h pixels ────────────────────
+    // Falls back to a filled circle if the image hasn't loaded.
+    function drawSprite(key, px, py, w, h, alpha, angle) {
+        const img = SPRITES[key];
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(px, py);
+        if (angle) ctx.rotate(angle);
+        if (img && img.complete && !img._failed) {
+            ctx.drawImage(img, -w/2, -h/2, w, h);
+        } else {
+            // Fallback circle
+            ctx.beginPath();
+            ctx.arc(0, 0, w/2, 0, Math.PI*2);
+            ctx.fillStyle = FALLBACK[key] || '#888';
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    // ── Main render loop ──────────────────────────────────────────────────────
+    let _lastT = null;
+    function renderLoop(t) {
+        requestAnimationFrame(renderLoop);
+        if (!ctx || !crewSrc || !predSrc) return;
+
+        const dt = _lastT ? Math.min((t - _lastT) / 1000, 0.05) : 0.016;
+        _lastT = t;
+
+        // ── Event detection ───────────────────────────────────────────────────
+        const crewCount = crewSrc.data.x ? crewSrc.data.x.length : 0;
+        const pingCount = pingSrc && pingSrc.data.x ? pingSrc.data.x.length : 0;
+
+        // Crew catch — someone disappeared this frame
+        if (_prevCrewCount > 0 && crewCount < _prevCrewCount) {
+            const px = predSrc.data.x[0];
+            const py = predSrc.data.y[0];
+            if (px !== undefined) {
+                const [spx, spy] = worldToPixel(px, py);
+                spawnAcidSplatter(spx, spy);
+                spawnScreenFlash();
+            }
+        }
+        _prevCrewCount = crewCount;
+
+        // New pings — spawn ripple particles
+        if (pingCount > _prevPingCount && pingSrc.data.x) {
+            for (let i = _prevPingCount; i < pingCount; i++) {
+                const [spx, spy] = worldToPixel(pingSrc.data.x[i], pingSrc.data.y[i]);
+                spawnPingRipple(spx, spy);
+            }
+        }
+        _prevPingCount = pingCount;
+
+        updateParticles(dt);
+
+        // ── Clear ─────────────────────────────────────────────────────────────
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        // ── Acid splatter / ping particles ────────────────────────────────────
+        for (const p of particles) {
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, p.life) * 0.9;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+            ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`;
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // ── Crew sprites ──────────────────────────────────────────────────────
+        if (crewSrc.data.x) {
+            const xs = crewSrc.data.x;
+            const ys = crewSrc.data.y;
+            const cs = crewSrc.data.c;
+            for (let i = 0; i < xs.length; i++) {
+                const [px, py] = worldToPixel(xs[i], ys[i]);
+                const stateIdx = STATE_COLOR_TO_IDX[cs[i]] ?? 0;
+                const spriteKey = CREW_SPRITE[stateIdx];
+                drawSprite(spriteKey, px, py, 14, 14, 0.88, 0);
+            }
+        }
+
+        // ── Predator sprite ───────────────────────────────────────────────────
+        if (predSrc.data.x && predSrc.data.x.length > 0) {
+            const wx = predSrc.data.x[0];
+            const wy = predSrc.data.y[0];
+            const col = predSrc.data.c[0];
+            const sz  = predSrc.data.s[0] || 10;
+            const [px, py] = worldToPixel(wx, wy);
+
+            // Derive state from colour Python writes
+            let spriteKey, spriteSize;
+            if (col === '#FFFFFF') {
+                // Hatching — pulse scale
+                const pulse = 0.85 + 0.15 * Math.sin(Date.now() / 160);
+                spriteKey  = 'xeno_egg';
+                spriteSize = (sz / 10) * 52 * pulse;
+            } else if (col === '#FFE020') {
+                spriteKey  = 'xeno_locked';
+                spriteSize = (sz / 10) * 52;
+            } else {
+                spriteKey  = 'xeno';
+                spriteSize = (sz / 10) * 52;
+            }
+
+            // Glow ring for locked-on state
+            if (col === '#FFE020') {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(px, py, spriteSize * 0.7, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(255,224,32,0.25)';
+                ctx.lineWidth   = 6;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            drawSprite(spriteKey, px, py, spriteSize, spriteSize, 1.0, 0);
+        }
+
+        // ── Screen flash on kill ───────────────────────────────────────────────
+        if (_flashAlpha > 0) {
+            ctx.save();
+            ctx.globalAlpha = _flashAlpha;
+            ctx.fillStyle   = '#FFFFFF';
+            ctx.fillRect(0, 0, overlay.width, overlay.height);
+            ctx.restore();
+        }
+    }
+
+    // Kick off model search after Bokeh finishes loading
+    setTimeout(findModels, 800);
+
 })();
 </script>
 """, height=0, width=0, margin=0)
